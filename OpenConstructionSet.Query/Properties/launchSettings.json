@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "OpenConstructionSet.Query": {
+      "commandName": "Project",
+      "commandLineArgs": "-rgb -o ../../../../data.json -e \"items.Where(i => i.Mod == \\\"gamedata.base\\\"\")\""
+    }
+  }
+}
