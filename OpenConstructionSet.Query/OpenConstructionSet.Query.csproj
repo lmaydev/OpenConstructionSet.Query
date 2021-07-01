@@ -10,7 +10,7 @@
 
 	<ItemGroup>
 		<PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="3.10.0" />
-		<PackageReference Include="OpenConstructionSet" Version="0.3.2" />
+		<PackageReference Include="OpenConstructionSet" Version="0.3.3" />
 		<PackageReference Include="System.Text.Json" Version="5.0.2" />
 	</ItemGroup>
 
