@@ -6,25 +6,70 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Threading.Tasks;
 
 namespace OpenConstructionSet.Query
 {
-    using C = Func<IEnumerable<ItemModel>, IEnumerable<object>>;
+    using Selector = Func<IEnumerable<ItemModel>, IEnumerable<object>>;
 
     class Program
     {
-        static void Main(string[] args)
+
+        static async Task<int> Main(string[] args)
         {
             var input = QueryData.Parse(args);
 
             var gameData = OcsHelper.Load(input.Mods, input.ActiveMod, input.Folders, input.ResolveDependencies, input.LoadGameFiles);
 
-            var data = input.Selector(gameData.items.Values.ToModels());
+            Selector selector = null;
 
-            System.IO.File.WriteAllText(input.OutputFile, JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
+            try
+            {
+                selector = await BuildSelector(input.Expression);
+            }
+            catch(Exception ex)
+            {
+                Console.Error.WriteLine("Failed to build expression");
+                return 1;
+            }
+
+            var data = selector(gameData.items.Values.ToModels());
+
+            try
+            {
+                using (var stream = System.IO.File.Create(input.OutputFile))
+                {
+                    await JsonSerializer.SerializeAsync(stream, data);
+                }
+            }
+            catch
+            {
+                Console.Error.WriteLine("Error writing data");
+                return 2;
+            }
+
+            return 0;
         }
 
-        delegate IEnumerable<object> Selector(IEnumerable<ItemModel> items);
+
+        static Task<Selector> BuildSelector(string expression)
+        {
+            const string prefix = "items =>";
+
+            if (!expression.StartsWith(prefix))
+            {
+                expression = prefix + expression;
+            }
+
+            var options = ScriptOptions.Default.AddReferences(typeof(GameData).Assembly)
+                                                           .AddReferences(typeof(Enumerable).Assembly)
+                                                           .AddReferences(typeof(OcsHelper).Assembly)
+                                                           .AddImports("System.Linq", "forgotten_construction_set", "OpenConstructionSet");
+
+            return CSharpScript.EvaluateAsync<Selector>(expression, options);
+        }
+
+        //delegate IEnumerable<object> Selector(IEnumerable<ItemModel> items);
 
         private class QueryData
         {
@@ -38,7 +83,7 @@ namespace OpenConstructionSet.Query
 
             public bool LoadGameFiles { get; set; }
 
-            public Selector Selector { get; set; }
+            public string Expression { get; set; }
 
             public string OutputFile { get; set; } = "data.json";
 
@@ -54,8 +99,6 @@ namespace OpenConstructionSet.Query
             public static QueryData Parse(string[] args)
             {
                 var result = new QueryData();
-
-                string expression = null;
 
                 bool useGameFolders = false;
 
@@ -96,7 +139,7 @@ namespace OpenConstructionSet.Query
                                 result.ActiveMod = arg;
                                 break;
                             case 'e':
-                                expression = arg;
+                                result.Expression = arg;
                                 break;
                             case 'o':
                                 result.OutputFile = arg;
@@ -110,10 +153,6 @@ namespace OpenConstructionSet.Query
                                 break;
                         }
                     }
-                    else
-                    {
-                        expression = arg;
-                    }
                 }
 
                 if (useGameFolders && OcsSteamHelper.TryFindGameFolders(out var folders))
@@ -121,27 +160,8 @@ namespace OpenConstructionSet.Query
                     result.Folders.AddRange(folders.ToArray());
                 }
 
-                result.Selector = (expression == null) ? new Selector(items => items) :
-                                                         new Selector(BuildSelector());
 
                 return result;
-
-                C BuildSelector()
-                {
-                    const string prefix = "items =>";
-
-                    if (!expression.StartsWith(prefix))
-                    {
-                        expression = prefix + expression;
-                    }
-
-                    var options = ScriptOptions.Default.AddReferences(typeof(GameData).Assembly)
-                                                       .AddReferences(typeof(Enumerable).Assembly)
-                                                       .AddReferences(typeof(OcsHelper).Assembly)
-                                                       .AddImports("System.Linq", "forgotten_construction_set", "OpenConstructionSet");
-
-                    return CSharpScript.EvaluateAsync<C>(expression, options).Result;
-                }
             }
         }
     }
