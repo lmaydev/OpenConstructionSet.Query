@@ -1,59 +1,127 @@
-﻿using forgotten_construction_set;
+﻿using CommandLine;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
 using Microsoft.CodeAnalysis.Scripting;
+using OpenConstructionSet.Data;
 using OpenConstructionSet.Models;
-using System;
-using System.Collections.Generic;
-using System.Linq;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
-using System.Threading.Tasks;
+using System.Text.Json.Serialization;
 
 namespace OpenConstructionSet.Query
 {
-    using Selector = Func<IEnumerable<ItemModel>, IEnumerable<object>>;
+    using Selector = Func<IEnumerable<Item>, object>;
 
-    class Program
+    partial class Program
     {
-
         static async Task<int> Main(string[] args)
         {
-            var input = QueryData.Parse(args);
-
-            var gameData = OcsHelper.Load(input.Mods, input.ActiveMod, input.Folders, input.ResolveDependencies, input.LoadGameFiles);
-
-            Selector selector = null;
-
-            try
+            if (!TryParse(args, out var arguments, out var errors))
             {
-                selector = await BuildSelector(input.Expression);
-            }
-            catch(Exception ex)
-            {
-                Console.Error.WriteLine("Failed to build expression");
+                Console.Error.WriteLine("Invalid arguments");
+                Console.Error.WriteLine(string.Join(Environment.NewLine, errors));
                 return 1;
             }
 
-            var data = selector(gameData.items.Values.ToModels());
+            Selector selector;
 
             try
             {
-                using (var stream = System.IO.File.Create(input.OutputFile))
+                selector = await Evaluate(arguments.Expression);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("Error whilst compiling expression");
+                Console.Error.WriteLine(ex.ToString());
+                return 2;
+            }
+
+            var discovery = OcsDiscoveryService.Default;
+
+            Installation? installation = null;
+
+            if (arguments.Installation is not null)
+            {
+                var locatorName = discovery.SupportedFolderLocators.FirstOrDefault(n => n.Equals(arguments.Installation, StringComparison.OrdinalIgnoreCase));
+
+                if (locatorName is null)
                 {
-                    await JsonSerializer.SerializeAsync(stream, data);
+                    Console.Error.WriteLine($"Installation \"{arguments.Installation}\" could not be found");
+                    return 3;
+                }
+
+                installation = discovery.DiscoverInstallation(locatorName);
+
+                if (installation is null)
+                {
+                    Console.Error.WriteLine($"Installation \"{arguments.Installation}\" could not be found");
+                    return 3;
                 }
             }
-            catch
+
+            // Using GUID as name is required :|
+            var options = new OcsDataContexOptions(Guid.NewGuid().ToString(),
+                                                   BaseMods: arguments.Mods,
+                                                   Installation: installation,
+                                                   LoadGameFiles: arguments.LoadGameFiles ? ModLoadType.Base : ModLoadType.None,
+                                                   LoadEnabledMods: arguments.LoadEnabledMods ? ModLoadType.Base : ModLoadType.None);
+
+            OcsDataContext context;
+
+            try
             {
-                Console.Error.WriteLine("Error writing data");
-                return 2;
+                context = OcsDataContextBuilder.Default.Build(options);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("Error whilst loading data");
+                Console.Error.WriteLine(ex.ToString());
+                return 4;
+            }
+
+            var data = selector(context.Items.Values);
+
+            Stream stream;
+
+            if (arguments.OutputFile is not null)
+            {
+                try
+                {
+                    File.Delete(arguments.OutputFile);
+
+                    stream = File.Create(arguments.OutputFile);
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"Error whilst creating output file \"{arguments.OutputFile}\"");
+                    Console.Error.WriteLine(ex.ToString());
+                    return 5;
+                }
+            }
+            else
+            {
+                stream = Console.OpenStandardOutput();
+            }
+
+            try
+            {
+                await JsonSerializer.SerializeAsync(stream, data, new JsonSerializerOptions { WriteIndented = true, Converters = { new JsonStringEnumConverter() } });
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("Error whilst serializing data");
+                Console.Error.Write(ex.ToString());
             }
 
             return 0;
         }
 
-
-        static Task<Selector> BuildSelector(string expression)
+        static Task<Selector> Evaluate(string? expression)
         {
+            if (string.IsNullOrEmpty(expression))
+            {
+                expression = "items";
+            }
+
             const string prefix = "items =>";
 
             if (!expression.StartsWith(prefix))
@@ -61,108 +129,38 @@ namespace OpenConstructionSet.Query
                 expression = prefix + expression;
             }
 
-            var options = ScriptOptions.Default.AddReferences(typeof(GameData).Assembly)
-                                                           .AddReferences(typeof(Enumerable).Assembly)
-                                                           .AddReferences(typeof(OcsHelper).Assembly)
-                                                           .AddImports("System.Linq", "forgotten_construction_set", "OpenConstructionSet");
+            var options = ScriptOptions.Default.AddReferences(typeof(Enumerable).Assembly)
+                                               .AddReferences(typeof(OcsDataContext).Assembly)
+                                               .AddImports("System.Linq", "OpenConstructionSet", "OpenConstructionSet.Models");
 
             return CSharpScript.EvaluateAsync<Selector>(expression, options);
         }
 
-        //delegate IEnumerable<object> Selector(IEnumerable<ItemModel> items);
-
-        private class QueryData
+        static bool TryParse(string[] args, [MaybeNullWhen(false)] out Arguments arguments, [MaybeNullWhen(true)] out IEnumerable<Error> errors)
         {
-            public string ActiveMod { get; set; }
+            var parseResult = new Parser(config => config.HelpWriter = Console.Out).ParseArguments<Arguments>(args);
 
-            public List<GameFolder> Folders { get; set; } = new List<GameFolder>();
+            Arguments? localArguments = arguments = null;
+            IEnumerable<Error>? localErrors = errors = null;
 
-            public List<string> Mods { get; set; } = new List<string>();
-
-            public bool ResolveDependencies { get; set; }
-
-            public bool LoadGameFiles { get; set; }
-
-            public string Expression { get; set; }
-
-            public string OutputFile { get; set; } = "data.json";
-
-            public QueryData()
-            {
-            }
-
-            public QueryData(string[] args)
-            {
-
-            }
-
-            public static QueryData Parse(string[] args)
-            {
-                var result = new QueryData();
-
-                bool useGameFolders = false;
-
-                char? currentSwitch = null;
-
-                for (var i = 0; i < args.Length; i++)
+            var success = parseResult.MapResult(
+                a =>
                 {
-                    var arg = args[i];
-
-                    if (arg.StartsWith("-"))
-                    {
-                        currentSwitch = null;
-
-                        foreach (var letter in arg.Substring(1))
-                        {
-                            switch (letter)
-                            {
-                                case 'r':
-                                    result.ResolveDependencies = true;
-                                    break;
-                                case 'g':
-                                    useGameFolders = true;
-                                    break;
-                                case 'b':
-                                    result.LoadGameFiles = true;
-                                    break;
-                                default:
-                                    currentSwitch = letter;
-                                    break;
-                            }
-                        }
-                    }
-                    else if (currentSwitch != null)
-                    {
-                        switch (currentSwitch)
-                        {
-                            case 'a':
-                                result.ActiveMod = arg;
-                                break;
-                            case 'e':
-                                result.Expression = arg;
-                                break;
-                            case 'o':
-                                result.OutputFile = arg;
-                                break;
-                            case 'm':
-                                result.Mods.Add(arg);
-                                break;
-                            case 'f':
-                                result.Folders.Add(GameFolder.Data(arg));
-                                result.Folders.Add(GameFolder.Mod(arg));
-                                break;
-                        }
-                    }
-                }
-
-                if (useGameFolders && OcsSteamHelper.TryFindGameFolders(out var folders))
+                    localArguments = a;
+                    localErrors = null;
+                    return true;
+                },
+                e =>
                 {
-                    result.Folders.AddRange(folders.ToArray());
-                }
+                    localArguments = null;
+                    localErrors = e;
+                    return false;
+                });
 
+            arguments = localArguments;
+            errors = localErrors;
 
-                return result;
-            }
+            return success;
         }
     }
 }

@@ -2,7 +2,7 @@
   "profiles": {
     "OpenConstructionSet.Query": {
       "commandName": "Project",
-      "commandLineArgs": "-rgb -o data.json -e \"items.OfType(itemType.BUILDING).Where(i => i.Mod == \\\"gamedata.base\\\")\""
+      "commandLineArgs": "\"items.OfType(ItemType.Building).Select(b => b.Name)\" -i steam -g -e"
     }
   }
 }

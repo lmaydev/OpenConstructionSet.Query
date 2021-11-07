@@ -2,23 +2,38 @@
 
 	<PropertyGroup>
 		<OutputType>Exe</OutputType>
-		<TargetFramework>net48</TargetFramework>
+		<TargetFramework>net6</TargetFramework>
+		<IsPackable>false</IsPackable>
+		<Nullable>enable</Nullable>
+		<WarningsAsErrors>nullable</WarningsAsErrors>
+		<Platforms>x64</Platforms>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Configurations>Debug;Release</Configurations>
 		<AssemblyName>ocs-query</AssemblyName>
-		<Platforms>x86</Platforms>
-		<KenshiFolder>C:\Program Files (x86)\Steam\steamapps\common\Kenshi\</KenshiFolder>
+	</PropertyGroup>
+
+	<PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+		<PublishTrimmed>true</PublishTrimmed>
+		<PublishSingleFile>true</PublishSingleFile>
+		<PublishReadyToRun>true</PublishReadyToRun>
+		<RuntimeIdentifier>win-x64</RuntimeIdentifier>
+		<TrimMode>link</TrimMode>
+		<SuppressTrimAnalysisWarnings>false</SuppressTrimAnalysisWarnings>
 	</PropertyGroup>
 
 	<ItemGroup>
+		<PackageReference Include="commandlineparser" Version="2.8.0" />
 		<PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="3.10.0" />
-		<PackageReference Include="OpenConstructionSet" Version="0.3.3" />
-		<PackageReference Include="System.Text.Json" Version="5.0.2" />
+		<PackageReference Include="OpenConstructionSet" Version="2.0.0" />
 	</ItemGroup>
 
-	<ItemGroup>
-		<Reference Include="forgotten construction set">
-			<HintPath>$(KenshiFolder)forgotten construction set.exe</HintPath>
-			<Private>true</Private>
-		</Reference>
-	</ItemGroup>
 
+	<Target Name="ConfigureTrimming"
+        BeforeTargets="PrepareForILLink">
+		<ItemGroup>
+			<ManagedAssemblyToLink Condition="'%(Filename)' == 'OpenConstructionSet'">
+				<IsTrimmable>true</IsTrimmable>
+			</ManagedAssemblyToLink>
+		</ItemGroup>
+	</Target>
 </Project>
